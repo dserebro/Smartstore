@@ -10,6 +10,14 @@ using Smartstore.Scheduling;
 
 namespace Smartstore.Core.Identity.Rules;
 
+/// <remarks>
+/// Unlike the legacy task, which unconditionally disabled all save hooks (<c>hooksEnabled: false</c>) while
+/// rebuilding system role mappings, this task only suppresses hooks of <see cref="HookImportance.Normal"/>
+/// via <c>minHookImportance: HookImportance.Important</c>. Hooks tagged <see cref="ImportantAttribute"/> or
+/// <see cref="HookImportance.Essential"/> would still fire. This is currently a no-op divergence because no
+/// save hook targets <see cref="CustomerRoleMapping"/> (or one of its base/interface types) with that
+/// importance; re-check this remark if such a hook is ever added.
+/// </remarks>
 public partial class TargetGroupEvaluatorTask(
     SmartDbContext db,
     ICacheManager cache,
