@@ -18,6 +18,15 @@ namespace Smartstore.Core.Identity.Rules;
 /// save hook targets <see cref="CustomerRoleMapping"/> (or one of its base/interface types) with that
 /// importance; re-check this remark if such a hook is ever added.
 /// </remarks>
+/// <remarks>
+/// The role-filtered delete below (<c>roleIds.Contains(x.CustomerRoleId)</c>) is not just a faithful port of
+/// the legacy raw-SQL delete, it fixes a latent bug: legacy bound <c>string.Join(",", roleIds)</c> as a single
+/// SQL parameter into <c>In ({0})</c>, which only happened to work for one role id (the only case the admin UI
+/// ever triggers), because SQL Server can implicitly convert a one-element numeric string to <c>int</c>. With
+/// more than one id the same parameter (e.g. <c>"1,2,3"</c>) fails that conversion and the legacy delete throws
+/// instead of deleting the matching rows. The LINQ translation here produces a true parameterized <c>IN</c>
+/// clause and is correct for both the single- and multi-id case.
+/// </remarks>
 public partial class TargetGroupEvaluatorTask(
     SmartDbContext db,
     ICacheManager cache,
