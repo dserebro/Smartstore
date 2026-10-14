@@ -841,7 +841,7 @@ public class IconServiceTests
     public void SetUp()
     {
         var directory = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
-        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "Smartstore.Full.sln")))
+        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "Smartstore.sln")))
         {
             directory = directory.Parent;
         }
