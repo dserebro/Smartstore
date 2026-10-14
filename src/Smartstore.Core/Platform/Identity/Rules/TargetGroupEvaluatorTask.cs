@@ -14,9 +14,16 @@ namespace Smartstore.Core.Identity.Rules;
 /// Unlike the legacy task, which unconditionally disabled all save hooks (<c>hooksEnabled: false</c>) while
 /// rebuilding system role mappings, this task only suppresses hooks of <see cref="HookImportance.Normal"/>
 /// via <c>minHookImportance: HookImportance.Important</c>. Hooks tagged <see cref="ImportantAttribute"/> or
-/// <see cref="HookImportance.Essential"/> would still fire. This is currently a no-op divergence because no
-/// save hook targets <see cref="CustomerRoleMapping"/> (or one of its base/interface types) with that
-/// importance; re-check this remark if such a hook is ever added.
+/// <see cref="HookImportance.Essential"/> would still fire. <see cref="DefaultDbHookRegistry"/> selects hooks
+/// by <c>HookedType.IsAssignableFrom(entityType)</c>, so several <c>[Important]</c> hooks declared generically
+/// over <c>BaseEntity</c> (e.g. <c>StoreContext</c>, <c>MediaTrackerHook</c>, <c>AssignedEntitiesHook</c>,
+/// <c>SearchQueryAliasHook</c>) ARE selected and invoked for every <see cref="CustomerRoleMapping"/> save,
+/// since it derives from <see cref="BaseEntity"/> — "no hook targets this type" would be the wrong framing.
+/// What keeps the divergence moot today is that each of those hooks internally no-ops for
+/// <see cref="CustomerRoleMapping"/> (they check the concrete entity type/instance themselves and return
+/// <see cref="HookResult.Void"/> otherwise), not that the hook dispatch mechanism skips it. Re-check this
+/// remark if a future <c>[Important]</c>/<c>[Essential]</c> hook adds real logic for <see cref="CustomerRoleMapping"/>
+/// (or any of its base/interface types) instead of no-op'ing.
 /// </remarks>
 /// <remarks>
 /// The role-filtered delete below (<c>roleIds.Contains(x.CustomerRoleId)</c>) is not just a faithful port of
