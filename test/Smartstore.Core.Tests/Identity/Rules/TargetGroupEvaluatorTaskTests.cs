@@ -200,7 +200,7 @@ public class TargetGroupEvaluatorTaskTests : TargetGroupEvaluatorTaskTestsBase
     }
 
     [Test]
-    public async Task Run_InvalidatesAclCache_WhenMappingsWereAddedOrDeleted()
+    public async Task Run_InvalidatesAclCache_WhenMappingsWereAdded()
     {
         using var db = CreateSmartDbContext();
 
@@ -216,6 +216,34 @@ public class TargetGroupEvaluatorTaskTests : TargetGroupEvaluatorTaskTestsBase
         var (_, cacheManagerMock) = await RunTaskAsync(db);
 
         cacheManagerMock.Verify(x => x.RemoveByPatternAsync(AclService.ACL_SEGMENT_PATTERN), Times.Once);
+    }
+
+    [Test]
+    public async Task Run_InvalidatesAclCache_WhenMappingsWereDeleted()
+    {
+        using var db = CreateSmartDbContext();
+
+        // Role without any active rule set, so it is never a candidate for new assignments:
+        // this isolates the deletion-only branch of the cache-invalidation condition
+        // (numDeleted > 0 && numAdded == 0) from the insertion branch.
+        var role = new CustomerRole { Name = "RoleWithoutActiveRuleSet", Active = true };
+        db.CustomerRoles.Add(role);
+
+        var customer = new Customer { Username = "cust1" };
+        db.Customers.Add(customer);
+
+        await db.SaveChangesAsync();
+
+        db.CustomerRoleMappings.Add(new CustomerRoleMapping { CustomerId = customer.Id, CustomerRoleId = role.Id, IsSystemMapping = true });
+        await db.SaveChangesAsync();
+
+        var (_, cacheManagerMock) = await RunTaskAsync(db);
+
+        var remaining = await db.CustomerRoleMappings.AsNoTracking().ToListAsync();
+        Assert.That(remaining, Is.Empty, "The pre-existing system mapping should have been deleted and nothing re-added.");
+
+        cacheManagerMock.Verify(x => x.RemoveByPatternAsync(AclService.ACL_SEGMENT_PATTERN), Times.Once,
+            "Cache invalidation must fire when numDeleted > 0, even though numAdded == 0.");
     }
 
     [Test]
