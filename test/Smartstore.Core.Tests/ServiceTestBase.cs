@@ -6,6 +6,7 @@ using Autofac;
 using Autofac.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -161,31 +162,56 @@ public abstract class ServiceTestBase
 
     private void InitDbContext()
     {
-        var dataSettings = new DataSettings
+        DataSettings.Instance = CreateTestDataSettings(new TestDbFactory());
+        DataSettings.SetTestMode(true);
+
+        var builder = CreateDbContextOptionsBuilder();
+
+        _dbContext = new SmartDbContext((DbContextOptions<SmartDbContext>)builder.Options);
+        _dbContext.Database.EnsureCreated();
+    }
+
+    /// <summary>
+    /// Builds a test <see cref="DataSettings"/> instance backed by <paramref name="dbFactory"/>. Shared by
+    /// <see cref="InitDbContext"/> and derived fixtures (e.g. <c>TargetGroupEvaluatorTaskTestsBase</c>) that
+    /// need a <see cref="SmartDbContext"/> backed by a different <see cref="DbFactory"/>.
+    /// </summary>
+    protected static DataSettings CreateTestDataSettings(DbFactory dbFactory)
+    {
+        return new DataSettings
         {
             AppVersion = SmartstoreVersion.Version,
             ConnectionString = "Test",
             TenantName = "Default",
             TenantRoot = null, // TODO
-            DbFactory = new TestDbFactory()
+            DbFactory = dbFactory
         };
+    }
 
-        DataSettings.Instance = dataSettings;
-        DataSettings.SetTestMode(true);
-
+    /// <summary>
+    /// Builds the shared <see cref="DbContextOptionsBuilder{TContext}"/> for <see cref="SmartDbContext"/>,
+    /// optionally wired with <paramref name="interceptor"/>. Shared by <see cref="InitDbContext"/> and derived
+    /// fixtures that construct additional <see cref="SmartDbContext"/> instances.
+    /// </summary>
+    protected static DbContextOptionsBuilder CreateDbContextOptionsBuilder(IInterceptor interceptor = null)
+    {
         var builder = new DbContextOptionsBuilder<SmartDbContext>()
             .UseDbFactory(factoryBuilder =>
             {
                 factoryBuilder
                     .AddModelAssemblies(new[]
-                    { 
+                    {
                         // Add all core models from Smartstore.Core assembly
                         typeof(SmartDbContext).Assembly
                     });
             });
 
-        _dbContext = new SmartDbContext((DbContextOptions<SmartDbContext>)builder.Options);
-        _dbContext.Database.EnsureCreated();
+        if (interceptor != null)
+        {
+            builder.AddInterceptors(interceptor);
+        }
+
+        return builder;
     }
 
     private void InitProviders()

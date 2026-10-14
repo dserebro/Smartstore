@@ -61,14 +61,7 @@ public abstract class TargetGroupEvaluatorTaskTestsBase : ServiceTestBase
 
         _sqliteDbFactory = new SqliteTestDbFactory(_sqliteConnection);
 
-        DataSettings.Instance = new DataSettings
-        {
-            AppVersion = SmartstoreVersion.Version,
-            ConnectionString = "Test",
-            TenantName = "Default",
-            TenantRoot = null,
-            DbFactory = _sqliteDbFactory
-        };
+        DataSettings.Instance = CreateTestDataSettings(_sqliteDbFactory);
         DataSettings.SetTestMode(true);
 
         StoreContextMock = new Mock<IStoreContext>();
@@ -201,20 +194,7 @@ public abstract class TargetGroupEvaluatorTaskTestsBase : ServiceTestBase
 
     private SmartDbContext BuildDbContext(IInterceptor interceptor)
     {
-        var builder = new DbContextOptionsBuilder<SmartDbContext>()
-            .UseDbFactory(factoryBuilder =>
-            {
-                factoryBuilder.AddModelAssemblies(new[]
-                {
-                    typeof(SmartDbContext).Assembly
-                });
-            });
-
-        if (interceptor != null)
-        {
-            builder = builder.AddInterceptors(interceptor);
-        }
-
+        var builder = CreateDbContextOptionsBuilder(interceptor);
         return new SmartDbContext((DbContextOptions<SmartDbContext>)builder.Options);
     }
 
