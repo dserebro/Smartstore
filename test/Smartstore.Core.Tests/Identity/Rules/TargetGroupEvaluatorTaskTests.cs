@@ -14,10 +14,10 @@ namespace Smartstore.Core.Tests.Identity.Rules;
 [TestFixture]
 public class TargetGroupEvaluatorTaskTests : TargetGroupEvaluatorTaskTestsBase
 {
-    private static RuleSetEntity CreateTaxExemptRuleSet(bool isActive)
+    private static RuleSetEntity CreateTaxExemptRuleSet(bool isActive, string matchValue = "true")
     {
         var ruleSet = new RuleSetEntity { Scope = RuleScope.Customer, IsActive = isActive };
-        ruleSet.Rules.Add(new RuleEntity { RuleType = "TaxExempt", Operator = "=", Value = "true" });
+        ruleSet.Rules.Add(new RuleEntity { RuleType = "TaxExempt", Operator = "=", Value = matchValue });
         return ruleSet;
     }
 
@@ -111,6 +111,40 @@ public class TargetGroupEvaluatorTaskTests : TargetGroupEvaluatorTaskTestsBase
             "An inactive role must never be evaluated, even if its rule set is active.");
         Assert.That(mappings.Any(x => x.CustomerRoleId == roleWithInactiveRuleSet.Id), Is.False,
             "An active role whose only rule set is inactive must contribute no mappings.");
+    }
+
+    [Test]
+    public async Task Run_AggregatesMappings_AcrossMultipleActiveRolesInSingleRun()
+    {
+        using var db = CreateSmartDbContext();
+
+        var exemptCustomer = new Customer { Username = "exempt", IsTaxExempt = true };
+        var nonExemptCustomer = new Customer { Username = "nonexempt", IsTaxExempt = false };
+        db.Customers.AddRange(exemptCustomer, nonExemptCustomer);
+
+        var exemptRole = new CustomerRole { Name = "ExemptRole", Active = true };
+        exemptRole.RuleSets.Add(CreateTaxExemptRuleSet(isActive: true, matchValue: "true"));
+
+        var nonExemptRole = new CustomerRole { Name = "NonExemptRole", Active = true };
+        nonExemptRole.RuleSets.Add(CreateTaxExemptRuleSet(isActive: true, matchValue: "false"));
+
+        db.CustomerRoles.AddRange(exemptRole, nonExemptRole);
+        await db.SaveChangesAsync();
+
+        await RunTaskAsync(db);
+
+        var mappings = await db.CustomerRoleMappings.AsNoTracking().ToListAsync();
+
+        Assert.That(mappings, Has.Count.EqualTo(2),
+            "Both roles must contribute their own mapping in the same Run() call.");
+        Assert.That(mappings.Any(x => x.CustomerRoleId == exemptRole.Id && x.CustomerId == exemptCustomer.Id), Is.True,
+            "The exempt role must be mapped to the exempt customer.");
+        Assert.That(mappings.Any(x => x.CustomerRoleId == nonExemptRole.Id && x.CustomerId == nonExemptCustomer.Id), Is.True,
+            "The non-exempt role must be mapped to the non-exempt customer.");
+        Assert.That(mappings.Any(x => x.CustomerRoleId == exemptRole.Id && x.CustomerId == nonExemptCustomer.Id), Is.False,
+            "A role's matched customer ids must not leak into another role's mapping set processed in the same loop.");
+        Assert.That(mappings.Any(x => x.CustomerRoleId == nonExemptRole.Id && x.CustomerId == exemptCustomer.Id), Is.False,
+            "A role's matched customer ids must not leak into another role's mapping set processed in the same loop.");
     }
 
     [Test]
