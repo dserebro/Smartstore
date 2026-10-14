@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using Autofac;
 using Autofac.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Http;
@@ -25,6 +26,7 @@ using Smartstore.Core.Tests.Common;
 using Smartstore.Core.Tests.Content.Media.Storage;
 using Smartstore.Core.Tests.Shipping;
 using Smartstore.Core.Tests.Tax;
+using Smartstore.Core.Web;
 using Smartstore.Data;
 using Smartstore.Data.Providers;
 using Smartstore.Engine;
@@ -144,6 +146,14 @@ public abstract class ServiceTestBase
                 // Register some dependencies which will be resolved by Autofac during obtaining PriceCalculators.
                 var productAttributeMaterializerMock = new Mock<IProductAttributeMaterializer>();
                 builder.RegisterInstance(productAttributeMaterializerMock.Object).As<IProductAttributeMaterializer>().SingleInstance();
+
+                // Register mocked IUserAgentParser, else DeviceRule.GetDefaultOptions() (called eagerly while
+                // building the full RuleScope.Customer descriptor catalog) will throw ComponentNotRegisteredException.
+                var userAgentParserMock = new Mock<IUserAgentParser>();
+                userAgentParserMock
+                    .Setup(x => x.GetDetectableAgents(It.IsAny<UserAgentSegment>()))
+                    .Returns(Enumerable.Empty<string>());
+                builder.RegisterInstance(userAgentParserMock.Object).As<IUserAgentParser>().SingleInstance();
             });
 
         return builder;
