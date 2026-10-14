@@ -192,6 +192,26 @@ public abstract class TargetGroupEvaluatorTaskTestsBase : ServiceTestBase
             parameters);
     }
 
+    /// <summary>
+    /// Builds the <see cref="TargetGroupEvaluatorTask"/> via <see cref="CreateSut"/>, creates an execution
+    /// context via <see cref="CreateExecutionContext"/>, and awaits <see cref="TargetGroupEvaluatorTask.Run"/>.
+    /// Used by test methods that need no custom progress/cancellation wiring, so they only contain the parts
+    /// that vary (seed data, parameters, assertions) — the same pattern <c>FilterTestsBase.ExecuteQuery</c>
+    /// uses to keep query-execution plumbing out of <c>FilterTests</c> test methods.
+    /// </summary>
+    protected async Task<(TargetGroupEvaluatorTask Task, Mock<ICacheManager> CacheManager)> RunTaskAsync(
+        SmartDbContext db,
+        IDictionary<string, string> parameters = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (task, cacheManagerMock) = CreateSut(db);
+        var ctx = CreateExecutionContext(parameters);
+
+        await task.Run(ctx, cancellationToken);
+
+        return (task, cacheManagerMock);
+    }
+
     private SmartDbContext BuildDbContext(IInterceptor interceptor)
     {
         var builder = CreateDbContextOptionsBuilder(interceptor);

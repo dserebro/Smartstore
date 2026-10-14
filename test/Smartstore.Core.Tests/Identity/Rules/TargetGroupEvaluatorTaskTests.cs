@@ -40,10 +40,7 @@ public class TargetGroupEvaluatorTaskTests : TargetGroupEvaluatorTaskTestsBase
         db.CustomerRoleMappings.Add(new CustomerRoleMapping { CustomerId = customer.Id, CustomerRoleId = role.Id, IsSystemMapping = false });
         await db.SaveChangesAsync();
 
-        var (task, _) = CreateSut(db);
-        var ctx = CreateExecutionContext();
-
-        await task.Run(ctx, CancellationToken.None);
+        await RunTaskAsync(db);
 
         var remaining = await db.CustomerRoleMappings.AsNoTracking().ToListAsync();
 
@@ -70,13 +67,10 @@ public class TargetGroupEvaluatorTaskTests : TargetGroupEvaluatorTaskTestsBase
         db.CustomerRoleMappings.Add(new CustomerRoleMapping { CustomerId = customer.Id, CustomerRoleId = roleB.Id, IsSystemMapping = true });
         await db.SaveChangesAsync();
 
-        var (task, _) = CreateSut(db);
-        var ctx = CreateExecutionContext(new Dictionary<string, string>
+        await RunTaskAsync(db, new Dictionary<string, string>
         {
             ["CustomerRoleIds"] = roleA.Id.ToString()
         });
-
-        await task.Run(ctx, CancellationToken.None);
 
         var remaining = await db.CustomerRoleMappings.AsNoTracking().ToListAsync();
 
@@ -107,10 +101,7 @@ public class TargetGroupEvaluatorTaskTests : TargetGroupEvaluatorTaskTestsBase
         db.CustomerRoles.AddRange(activeRole, inactiveRole, roleWithInactiveRuleSet);
         await db.SaveChangesAsync();
 
-        var (task, _) = CreateSut(db);
-        var ctx = CreateExecutionContext();
-
-        await task.Run(ctx, CancellationToken.None);
+        await RunTaskAsync(db);
 
         var mappings = await db.CustomerRoleMappings.AsNoTracking().ToListAsync();
 
@@ -222,10 +213,7 @@ public class TargetGroupEvaluatorTaskTests : TargetGroupEvaluatorTaskTestsBase
 
         await db.SaveChangesAsync();
 
-        var (task, cacheManagerMock) = CreateSut(db);
-        var ctx = CreateExecutionContext();
-
-        await task.Run(ctx, CancellationToken.None);
+        var (_, cacheManagerMock) = await RunTaskAsync(db);
 
         cacheManagerMock.Verify(x => x.RemoveByPatternAsync(AclService.ACL_SEGMENT_PATTERN), Times.Once);
     }
@@ -246,10 +234,7 @@ public class TargetGroupEvaluatorTaskTests : TargetGroupEvaluatorTaskTestsBase
 
         await db.SaveChangesAsync();
 
-        var (task, cacheManagerMock) = CreateSut(db);
-        var ctx = CreateExecutionContext();
-
-        await task.Run(ctx, CancellationToken.None);
+        var (_, cacheManagerMock) = await RunTaskAsync(db);
 
         var mappings = await db.CustomerRoleMappings.AsNoTracking().ToListAsync();
         Assert.That(mappings, Is.Empty, "No customer matches the rule, so no mappings should have been added.");
