@@ -30,24 +30,33 @@ public partial class TargetGroupEvaluatorTask(
 
         using (var scope = new DbContextScope(_db, autoDetectChanges: false, minHookImportance: HookImportance.Important, deferCommit: true))
         {
+            var customerRoleIds = ctx.Parameters.ContainsKey("CustomerRoleIds")
+                ? ctx.Parameters["CustomerRoleIds"].ToIntArray()
+                : null;
+
             // Delete existing system mappings.
             var deleteQuery = _db.CustomerRoleMappings.Where(x => x.IsSystemMapping);
-            if (ctx.Parameters.ContainsKey("CustomerRoleIds"))
+            if (customerRoleIds != null)
             {
-                var roleIds = ctx.Parameters["CustomerRoleIds"].ToIntArray();
-                deleteQuery = deleteQuery.Where(x => roleIds.Contains(x.CustomerRoleId));
+                deleteQuery = deleteQuery.Where(x => customerRoleIds.Contains(x.CustomerRoleId));
             }
 
-            numDeleted = await deleteQuery.ExecuteDeleteAsync(cancelToken);
+            numDeleted = await DeleteSystemMappingsAsync(deleteQuery, cancelToken);
 
             // Insert new customer role mappings.
-            var roles = await _db.CustomerRoles
+            var rolesQuery = _db.CustomerRoles
                 .Include(x => x.RuleSets)
                 .ThenInclude(x => x.Rules)
                 .AsNoTracking()
                 .AsSplitQuery()
-                .Where(x => x.Active && x.RuleSets.Any(y => y.IsActive))
-                .ToListAsync(cancelToken);
+                .Where(x => x.Active && x.RuleSets.Any(y => y.IsActive));
+
+            if (customerRoleIds != null)
+            {
+                rolesQuery = rolesQuery.Where(x => customerRoleIds.Contains(x.Id));
+            }
+
+            var roles = await rolesQuery.ToListAsync(cancelToken);
             rolesCount = roles.Count;
 
             foreach (var role in roles)
@@ -115,5 +124,12 @@ public partial class TargetGroupEvaluatorTask(
         }
 
         Debug.WriteLineIf(numDeleted > 0 || numAdded > 0, $"Deleted {numDeleted} and added {numAdded} customer assignments for {rolesCount} roles.");
+    }
+
+    protected virtual Task<int> DeleteSystemMappingsAsync(
+        IQueryable<CustomerRoleMapping> deleteQuery,
+        CancellationToken cancelToken)
+    {
+        return deleteQuery.ExecuteDeleteAsync(cancelToken);
     }
 }
