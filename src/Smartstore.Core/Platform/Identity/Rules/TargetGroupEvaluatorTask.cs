@@ -41,7 +41,7 @@ public partial class TargetGroupEvaluatorTask(
                 deleteQuery = deleteQuery.Where(x => customerRoleIds.Contains(x.CustomerRoleId));
             }
 
-            numDeleted = await deleteQuery.ExecuteDeleteAsync(cancelToken);
+            numDeleted = await DeleteSystemMappingsAsync(deleteQuery, cancelToken);
 
             // Insert new customer role mappings.
             var rolesQuery = _db.CustomerRoles
@@ -124,5 +124,12 @@ public partial class TargetGroupEvaluatorTask(
         }
 
         Debug.WriteLineIf(numDeleted > 0 || numAdded > 0, $"Deleted {numDeleted} and added {numAdded} customer assignments for {rolesCount} roles.");
+    }
+
+    protected virtual Task<int> DeleteSystemMappingsAsync(
+        IQueryable<CustomerRoleMapping> deleteQuery,
+        CancellationToken cancelToken)
+    {
+        return deleteQuery.ExecuteDeleteAsync(cancelToken);
     }
 }

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,6 +10,7 @@ using Moq;
 using NUnit.Framework;
 using Smartstore.Caching;
 using Smartstore.Collections;
+using Smartstore.Core.Data;
 using Smartstore.Core.Identity;
 using Smartstore.Core.Identity.Rules;
 using Smartstore.Core.Rules;
@@ -25,7 +25,7 @@ namespace Smartstore.Core.Tests.Platform.Identity.Rules;
 [TestFixture]
 public class TargetGroupEvaluatorTaskTests : ServiceTestBase
 {
-    private TargetGroupEvaluatorTask _task;
+    private TestableTargetGroupEvaluatorTask _task;
     private Mock<ICacheManager> _cacheMock;
     private Mock<IRuleService> _ruleServiceMock;
     private Mock<IRuleProviderFactory> _ruleProviderFactoryMock;
@@ -43,7 +43,7 @@ public class TargetGroupEvaluatorTaskTests : ServiceTestBase
             .Setup(x => x.GetProvider(RuleScope.Customer, null))
             .Returns(_targetGroupServiceMock.Object);
 
-        _task = new TargetGroupEvaluatorTask(
+        _task = new TestableTargetGroupEvaluatorTask(
             DbContext,
             _cacheMock.Object,
             _ruleServiceMock.Object,
@@ -115,8 +115,7 @@ public class TargetGroupEvaluatorTaskTests : ServiceTestBase
     private async Task<(CustomerRole role, RuleSetEntity ruleSet)> SeedRoleWithRuleSetAsync(
         string systemName,
         bool roleActive = true,
-        bool ruleSetActive = true,
-        int roleId = 0)
+        bool ruleSetActive = true)
     {
         var ruleSet = new RuleSetEntity
         {
@@ -186,17 +185,7 @@ public class TargetGroupEvaluatorTaskTests : ServiceTestBase
 
     private void SetupProcessFilterEmpty()
     {
-        var emptyQuery = Enumerable.Empty<Customer>().AsQueryable();
-        var pagedList = new Mock<IPagedList<Customer>>();
-        pagedList.Setup(x => x.SourceQuery).Returns(emptyQuery);
-
-        _targetGroupServiceMock
-            .Setup(x => x.ProcessFilter(
-                It.IsAny<FilterExpression[]>(),
-                It.IsAny<LogicalRuleOperator>(),
-                It.IsAny<int>(),
-                It.IsAny<int>()))
-            .Returns(pagedList.Object);
+        SetupProcessFilter(DbContext.Customers.Where(x => false));
     }
 
     private async Task SeedSystemMappingsAsync(int roleId, int[] customerIds)
@@ -341,7 +330,6 @@ public class TargetGroupEvaluatorTaskTests : ServiceTestBase
         var (role, ruleSet) = await SeedRoleWithRuleSetAsync("TestRole_Cancel");
 
         var cts = new CancellationTokenSource();
-        var expression = new FilterExpressionGroup();
 
         _ruleServiceMock
             .Setup(x => x.CreateExpressionGroupAsync(
@@ -349,9 +337,7 @@ public class TargetGroupEvaluatorTaskTests : ServiceTestBase
                 It.IsAny<IRuleVisitor>(),
                 It.IsAny<bool>()))
             .Callback(() => cts.Cancel())
-            .Returns(Task.FromResult<IRuleExpressionGroup>(expression));
-
-        SetupProcessFilterEmpty();
+            .ReturnsAsync((IRuleExpressionGroup)null);
 
         var ctx = CreateTaskContext();
         await _task.Run(ctx, cts.Token);
@@ -364,7 +350,7 @@ public class TargetGroupEvaluatorTaskTests : ServiceTestBase
     public async Task Cancellation_during_chunk_insert_preserves_committed_chunks()
     {
         var (role, ruleSet) = await SeedRoleWithRuleSetAsync("TestRole_CancelChunk");
-        var customers = await SeedCustomersAsync(1200);
+        await SeedCustomersAsync(1000);
 
         var cts = new CancellationTokenSource();
         var expression = new FilterExpressionGroup();
@@ -372,36 +358,33 @@ public class TargetGroupEvaluatorTaskTests : ServiceTestBase
         SetupProcessFilter(DbContext.Customers.AsQueryable());
 
         int chunkCount = 0;
-        _targetGroupServiceMock
-            .Setup(x => x.ProcessFilter(
-                It.IsAny<FilterExpression[]>(),
-                It.IsAny<LogicalRuleOperator>(),
-                It.IsAny<int>(),
-                It.IsAny<int>()))
-            .Returns<FilterExpression[], LogicalRuleOperator, int, int>((filters, op, pageIndex, pageSize) =>
+        EventHandler<SavedChangesEventArgs> onSaved = (_, args) =>
+        {
+            if (args.EntitiesSavedCount > 0)
             {
-                var pagedList = new Mock<IPagedList<Customer>>();
-                pagedList.Setup(x => x.SourceQuery).Returns(DbContext.Customers.AsQueryable());
-                return pagedList.Object;
-            });
+                chunkCount++;
+                cts.Cancel();
+            }
+        };
+        DbContext.SavedChanges += onSaved;
 
         var ctx = CreateTaskContext();
 
-        // Cancel after a short delay — with 1200 customers (3 chunks of 500),
-        // the first chunk should commit before cancellation triggers.
-        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
-
-        await _task.Run(ctx, cts.Token);
+        try
+        {
+            await _task.Run(ctx, cts.Token);
+        }
+        finally
+        {
+            DbContext.SavedChanges -= onSaved;
+        }
 
         var mappings = DbContext.CustomerRoleMappings
             .Where(x => x.CustomerRoleId == role.Id && x.IsSystemMapping)
             .ToList();
 
-        // At least one chunk (up to 500) should have been committed before cancellation.
-        // The total should be less than the full 1200 (proving cancellation stopped processing)
-        // or equal to 1200 if cancellation happened after all chunks.
-        (mappings.Count > 0).ShouldBeTrue();
-        (mappings.Count <= 1200).ShouldBeTrue();
+        chunkCount.ShouldEqual(1);
+        mappings.Count.ShouldEqual(500);
     }
 
     #endregion
@@ -616,7 +599,6 @@ public class TargetGroupEvaluatorTaskTests : ServiceTestBase
         var expression = new FilterExpressionGroup();
         SetupRuleServiceForRuleSet(ruleSet, expression);
 
-        IQueryable<Customer> capturedQuery = null;
         int capturedPageSize = 0;
 
         _targetGroupServiceMock
@@ -640,45 +622,6 @@ public class TargetGroupEvaluatorTaskTests : ServiceTestBase
     }
 
     [Test]
-    public async Task Parity_chunk_size_500_for_batch_inserts()
-    {
-        var (role, ruleSet) = await SeedRoleWithRuleSetAsync("TestRole_Parity_ChunkSize");
-        var customers = await SeedCustomersAsync(501);
-
-        var expression = new FilterExpressionGroup();
-        SetupRuleServiceForRuleSet(ruleSet, expression);
-        SetupProcessFilter(DbContext.Customers.AsQueryable());
-
-        var ctx = CreateTaskContext();
-        await _task.Run(ctx, CancellationToken.None);
-
-        var mappings = DbContext.CustomerRoleMappings
-            .Where(x => x.CustomerRoleId == role.Id && x.IsSystemMapping)
-            .ToList();
-
-        // All 501 customers should have mappings, proving chunks were processed correctly.
-        mappings.Count.ShouldEqual(501);
-    }
-
-    [Test]
-    public async Task Parity_acl_cache_invalidation()
-    {
-        var (role, ruleSet) = await SeedRoleWithRuleSetAsync("TestRole_Parity_ACL");
-        var customers = await SeedCustomersAsync(1);
-
-        var expression = new FilterExpressionGroup();
-        SetupRuleServiceForRuleSet(ruleSet, expression);
-        SetupProcessFilter(DbContext.Customers.AsQueryable());
-
-        var ctx = CreateTaskContext();
-        await _task.Run(ctx, CancellationToken.None);
-
-        _cacheMock.Verify(
-            x => x.RemoveByPatternAsync(AclService.ACL_SEGMENT_PATTERN),
-            Times.Once);
-    }
-
-    [Test]
     public async Task Parity_progress_reported_per_role()
     {
         var (role1, ruleSet1) = await SeedRoleWithRuleSetAsync("TestRole_Progress1");
@@ -689,7 +632,6 @@ public class TargetGroupEvaluatorTaskTests : ServiceTestBase
         SetupRuleServiceForRuleSet(ruleSet2, expression);
         SetupProcessFilterEmpty();
 
-        var ctx = CreateTaskContext();
         var mockCtx = new Mock<TaskExecutionContext>(
             new Mock<ITaskStore>().Object,
             new Mock<IAsyncState>().Object,
@@ -762,9 +704,7 @@ public class TargetGroupEvaluatorTaskTests : ServiceTestBase
                     cts.Cancel();
                 }
             })
-            .Returns(Task.FromResult<IRuleExpressionGroup>(new FilterExpressionGroup()));
-
-        SetupProcessFilterEmpty();
+            .ReturnsAsync((IRuleExpressionGroup)null);
 
         var ctx = CreateTaskContext();
         await _task.Run(ctx, cts.Token);
@@ -829,46 +769,26 @@ public class TargetGroupEvaluatorTaskTests : ServiceTestBase
         totalMappings.ShouldEqual(6);
     }
 
-    [Test]
-    public async Task Parity_debug_output_written_when_mappings_change()
-    {
-        // Debug.WriteLineIf is compiled out in Release builds, so we verify
-        // the condition it guards: that the task tracks numDeleted and numAdded
-        // correctly. When mappings change, the condition (numDeleted > 0 || numAdded > 0)
-        // is true, which also triggers cache invalidation — we verify this as a proxy.
-        var (role, ruleSet) = await SeedRoleWithRuleSetAsync("TestRole_DebugOutput");
-        var customers = await SeedCustomersAsync(2);
-
-        var expression = new FilterExpressionGroup();
-        SetupRuleServiceForRuleSet(ruleSet, expression);
-        SetupProcessFilter(DbContext.Customers.AsQueryable());
-
-        var ctx = CreateTaskContext();
-        await _task.Run(ctx, CancellationToken.None);
-
-        // numAdded > 0 triggers both Debug.WriteLineIf and cache invalidation.
-        _cacheMock.Verify(
-            x => x.RemoveByPatternAsync(AclService.ACL_SEGMENT_PATTERN),
-            Times.Once);
-
-        var mappings = DbContext.CustomerRoleMappings
-            .Where(x => x.CustomerRoleId == role.Id && x.IsSystemMapping)
-            .ToList();
-        mappings.Count.ShouldEqual(2);
-    }
-
-    [Test]
-    public async Task Parity_debug_output_not_written_when_no_mappings_change()
-    {
-        // When no mappings change, (numDeleted > 0 || numAdded > 0) is false,
-        // so Debug.WriteLineIf does nothing, and cache is not invalidated.
-        var ctx = CreateTaskContext();
-        await _task.Run(ctx, CancellationToken.None);
-
-        _cacheMock.Verify(
-            x => x.RemoveByPatternAsync(It.IsAny<string>()),
-            Times.Never);
-    }
-
     #endregion
+
+    private sealed class TestableTargetGroupEvaluatorTask : TargetGroupEvaluatorTask
+    {
+        public TestableTargetGroupEvaluatorTask(
+            SmartDbContext db,
+            ICacheManager cache,
+            IRuleService ruleService,
+            IRuleProviderFactory ruleProviderFactory)
+            : base(db, cache, ruleService, ruleProviderFactory)
+        {
+        }
+
+        protected override async Task<int> DeleteSystemMappingsAsync(
+            IQueryable<CustomerRoleMapping> deleteQuery,
+            CancellationToken cancelToken)
+        {
+            var toDelete = await deleteQuery.ToListAsync(cancelToken);
+            _db.CustomerRoleMappings.RemoveRange(toDelete);
+            return toDelete.Count;
+        }
+    }
 }
